@@ -11,7 +11,7 @@ use crate::render_stats::render_stats;
 use crate::run_log::RunLog;
 
 pub(crate) trait Measure {
-    type NumberDisplay: Display + Copy;
+    type NumberDisplay: Display;
 
     fn number_to_display(&self, number: u64) -> Self::NumberDisplay;
 
@@ -64,6 +64,38 @@ impl Measure for MaxRss {
 
     fn id(&self) -> &str {
         "max-rss"
+    }
+}
+
+pub struct User {
+    pub is_size: bool,
+    pub name: String,
+    pub id: String,
+    pub idx: usize,
+}
+
+impl Measure for User {
+    /// Bytes.
+    type NumberDisplay = String;
+
+    fn number_to_display(&self, number: u64) -> String {
+        if self.is_size {
+            MaxRss.number_to_display(number).to_string()
+        } else {
+            WallTime.number_to_display(number).to_string()
+        }
+    }
+
+    fn key(&self) -> MeasureKey {
+        MeasureKey::User(self.idx)
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> &str {
+        &self.id
     }
 }
 

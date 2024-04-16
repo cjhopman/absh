@@ -1,5 +1,8 @@
 use std::convert::TryInto;
+use std::fmt::Display;
 use std::fmt::Write as _;
+use std::str::from_utf8;
+use std::str::FromStr;
 use std::time::Instant;
 
 use absh::ansi;
@@ -12,9 +15,11 @@ use absh::measure::map::MeasureMap;
 use absh::measure::tr::AllMeasures;
 use absh::measure::tr::MaxRss;
 use absh::measure::tr::MeasureDyn;
+use absh::measure::tr::User;
 use absh::measure::tr::WallTime;
 use absh::mem_usage::MemUsage;
 use absh::run_log::RunLog;
+use absh::sh::run_sh;
 use absh::sh::spawn_sh;
 use clap::Parser;
 use rand::prelude::SliceRandom;
@@ -65,9 +70,51 @@ struct Opts {
     /// Also measure max resident set size.
     #[clap(short = 'm', long)]
     mem: bool,
+    #[clap(long)]
+    also_measure: Vec<AlsoMeasure>,
     /// Test is considered failed if it takes longer than this many seconds.
     #[clap(long)]
     max_time: Option<u32>,
+}
+
+#[derive(Debug)]
+struct AlsoMeasure {
+    id: String,
+    is_size: bool,
+    name: String,
+    cmd: String,
+}
+
+impl FromStr for AlsoMeasure {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // expect format:  "measure-id:0:description of measure:command to run"
+        if let Some((id, rest)) = s.split_once(":") {
+            if let Some((is_size, rest)) = rest.split_once(":") {
+                if let Some((description, cmd)) = rest.split_once(":") {
+                    let is_size = match is_size {
+                        "0" => false,
+                        "1" => true,
+                        _ => return Err(s.to_owned()),
+                    };
+                    return Ok(AlsoMeasure {
+                        id: id.to_owned(),
+                        is_size,
+                        name: description.to_owned(),
+                        cmd: cmd.to_owned(),
+                    });
+                }
+            }
+        }
+        Err(s.to_owned())
+    }
+}
+
+impl Display for AlsoMeasure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}:{}", self.id, self.is_size, self.name, self.cmd)
+    }
 }
 
 fn run_test(log: &mut RunLog, test: &mut Experiment, opts: &Opts) -> anyhow::Result<()> {
@@ -133,16 +180,44 @@ fn run_test(log: &mut RunLog, test: &mut Experiment, opts: &Opts) -> anyhow::Res
     }
     let max_rss = MemUsage::from_bytes(status.rusage.maxrss);
 
+    test.measures[MeasureKey::WallTime].push(duration.nanos());
+    test.measures[MeasureKey::MaxRss].push(max_rss.bytes());
+
+    let mut extra_info = "".to_string();
+    for (u, also_measure) in opts.also_measure.iter().enumerate() {
+        let output = run_sh(&also_measure.cmd)?;
+        if !output.status.success() {
+            writeln!(
+                log.both_log_and_stderr(),
+                "also_measure {} failed: {}",
+                &also_measure,
+                status.status
+            )?;
+            return Ok(());
+        }
+        let measure = from_utf8(&output.stdout)?.trim().parse()?;
+        test.measures[MeasureKey::User(u)].push(measure);
+
+        if also_measure.is_size {
+            extra_info += &format!(
+                ", {} {} MiB",
+                &also_measure.id,
+                MemUsage::from_bytes(measure).mib()
+            )
+        } else {
+            extra_info += &format!(", {} {} s", &also_measure.id, Duration::from_nanos(measure))
+        }
+    }
+
     writeln!(
         log.both_log_and_stderr(),
-        "{} finished in {:3} s, max rss {} MiB",
+        "{} finished in {:3} s, max rss {} MiB{}",
         test.name.name_colored(),
         duration,
         max_rss.mib(),
+        extra_info
     )?;
 
-    test.measures[MeasureKey::WallTime].push(duration.nanos());
-    test.measures[MeasureKey::MaxRss].push(max_rss.bytes());
     Ok(())
 }
 
@@ -165,6 +240,7 @@ fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
     let mut log = RunLog::open();
+    let user_measure_count = opts.also_measure.len();
 
     let mut experiments = ExperimentMap::default();
     experiments.insert(
@@ -173,7 +249,7 @@ fn main() -> anyhow::Result<()> {
             name: ExperimentName::A,
             warmup: opts.aw.clone().unwrap_or(String::new()),
             run: opts.a.clone(),
-            measures: MeasureMap::new_all_default(),
+            measures: MeasureMap::new_all_default(user_measure_count),
         },
     );
 
@@ -182,6 +258,7 @@ fn main() -> anyhow::Result<()> {
         name: ExperimentName,
         run: &Option<String>,
         warmup: &Option<String>,
+        user_measure_count: usize,
     ) {
         if let Some(run) = run.clone() {
             tests.insert(
@@ -190,15 +267,39 @@ fn main() -> anyhow::Result<()> {
                     name,
                     warmup: warmup.clone().unwrap_or(String::new()),
                     run,
-                    measures: MeasureMap::new_all_default(),
+                    measures: MeasureMap::new_all_default(user_measure_count),
                 },
             );
         }
     }
-    parse_opt_test(&mut experiments, ExperimentName::B, &opts.b, &opts.bw);
-    parse_opt_test(&mut experiments, ExperimentName::C, &opts.c, &opts.cw);
-    parse_opt_test(&mut experiments, ExperimentName::D, &opts.d, &opts.dw);
-    parse_opt_test(&mut experiments, ExperimentName::E, &opts.e, &opts.ew);
+    parse_opt_test(
+        &mut experiments,
+        ExperimentName::B,
+        &opts.b,
+        &opts.bw,
+        user_measure_count,
+    );
+    parse_opt_test(
+        &mut experiments,
+        ExperimentName::C,
+        &opts.c,
+        &opts.cw,
+        user_measure_count,
+    );
+    parse_opt_test(
+        &mut experiments,
+        ExperimentName::D,
+        &opts.d,
+        &opts.dw,
+        user_measure_count,
+    );
+    parse_opt_test(
+        &mut experiments,
+        ExperimentName::E,
+        &opts.e,
+        &opts.ew,
+        user_measure_count,
+    );
 
     eprintln!("Writing absh data to {}/", log.name().display());
     if let Some(last) = log.last() {
@@ -260,6 +361,22 @@ fn main() -> anyhow::Result<()> {
     measures.push(Box::new(WallTime));
     if opts.mem {
         measures.push(Box::new(MaxRss));
+    }
+    for (i, also_measure) in opts.also_measure.iter().enumerate() {
+        measures.push(Box::new(User {
+            is_size: also_measure.is_size,
+            name: format!(
+                "{} ({})",
+                &also_measure.name,
+                if also_measure.is_size {
+                    "in megabytes"
+                } else {
+                    "in seconds"
+                },
+            ),
+            id: also_measure.id.clone(),
+            idx: i,
+        }))
     }
     let measures = AllMeasures(measures);
 

@@ -2,15 +2,15 @@
 pub enum MeasureKey {
     WallTime,
     MaxRss,
+    User(usize),
 }
 
 impl MeasureKey {
-    pub const ALL: &'static [MeasureKey] = &[MeasureKey::WallTime, MeasureKey::MaxRss];
-
     pub fn index(&self) -> usize {
         match self {
             MeasureKey::WallTime => 0,
             MeasureKey::MaxRss => 1,
+            MeasureKey::User(u) => 2 + u,
         }
     }
 
@@ -18,7 +18,7 @@ impl MeasureKey {
         match index {
             0 => MeasureKey::WallTime,
             1 => MeasureKey::MaxRss,
-            _ => panic!("invalid index"),
+            u => MeasureKey::User(u - 2),
         }
     }
 }

@@ -18,13 +18,15 @@ impl<A> Default for MeasureMap<A> {
 }
 
 impl<A> MeasureMap<A> {
-    pub fn new_all_default() -> MeasureMap<A>
+    pub fn new_all_default(user_count: usize) -> MeasureMap<A>
     where
         A: Default,
     {
         let mut map = MeasureMap::default();
-        for key in MeasureKey::ALL {
-            map.insert(*key, A::default());
+        map.insert(MeasureKey::WallTime, A::default());
+        map.insert(MeasureKey::MaxRss, A::default());
+        for u in 0..user_count {
+            map.insert(MeasureKey::User(u), A::default());
         }
         map
     }

@@ -36,15 +36,15 @@ impl Stats<u64> {
     }
 }
 
-impl<A: Display + Copy> Stats<A> {
+impl<A: Display> Stats<A> {
     pub(crate) fn display_stats_new(stats: &ExperimentMap<Stats<A>>) -> ExperimentMap<String> {
         struct MultiWriter<'s, A> {
             vec: ExperimentMap<String>,
             stats: &'s ExperimentMap<Stats<A>>,
         }
 
-        impl<'s, A: Display + Copy> MultiWriter<'s, A> {
-            fn append_n<D: Display>(&mut self, v: impl Fn(&Stats<A>) -> D) -> fmt::Result {
+        impl<'s, A: Display> MultiWriter<'s, A> {
+            fn append_n<D: Display>(&mut self, v: impl Fn(&Stats<A>) -> &D) -> fmt::Result {
                 use std::fmt::Write;
                 let values: ExperimentMap<String> = self.stats.map(|s| v(s).to_string());
                 let max_len = values.values().map(|s| s.len()).max().unwrap();
@@ -64,7 +64,7 @@ impl<A: Display + Copy> Stats<A> {
             fn append_column<'d, D: Display + 'd>(
                 &mut self,
                 name: &str,
-                v: impl Fn(&Stats<A>) -> D,
+                v: impl Fn(&Stats<A>) -> &D,
             ) -> fmt::Result
             where
                 's: 'd,
@@ -78,13 +78,13 @@ impl<A: Display + Copy> Stats<A> {
             }
 
             fn append_stats(&mut self) -> fmt::Result {
-                self.append_column("n=", |s| s.count)?;
-                self.append_column("mean=", |s| s.mean)?;
-                self.append_column("std=", |s| s.std)?;
-                self.append_column("se=", |s| s.se)?;
-                self.append_column("min=", |s| s.min)?;
-                self.append_column("max=", |s| s.max)?;
-                self.append_column("med=", |s| s.med)?;
+                self.append_column("n=", |s| &s.count)?;
+                self.append_column("mean=", |s| &s.mean)?;
+                self.append_column("std=", |s| &s.std)?;
+                self.append_column("se=", |s| &s.se)?;
+                self.append_column("min=", |s| &s.min)?;
+                self.append_column("max=", |s| &s.max)?;
+                self.append_column("med=", |s| &s.med)?;
                 Ok(())
             }
         }
